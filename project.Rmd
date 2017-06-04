@@ -1,0 +1,127 @@
+---
+title: "Classifying the Quality of Weight Lifting Exercises"
+author: "Mathias Mathieu"
+date: "04/06/2017"
+output: html_document
+---
+
+##Introduction
+In this report we will discuss the results of building a classifier for weight lifting exercises. The data set used was constructed by letting six participants perform weight lifting exercises in 5 different ways, the correct way and with 4 common mistakes. The movements of the participants and weights were monitored using wearable sensors.  
+The goal was to use this movement data, and build a classifier that can recognize in which way, at each point in time, the exercise was done. We used the random forest algorithm to build our classifier, using most of the default settings, but with 10-fold cross validation in stead of bootstrapping the samples. This was done to decrease the time needed to build to model.  
+The constructed model was found to be very accurate, with a perfect accuracy for the training data, and over 99% accuracy on the test set. On the 20 test cases for the quiz, all cases were classified correctly.
+
+##Exploratory Analysis
+
+First we load the necessary libraries.
+
+```{r libs, echo=TRUE,message=FALSE}
+library(caret)
+library(parallel)
+library(doParallel)
+library(foreach)
+```
+
+
+We set the seed for the random generator to ensure reproducibility. We then load the data sets, and create a training and test set.
+
+```{r load,echo=TRUE}
+#set seed for reproducibility
+set.seed(54836)
+
+#load data sets
+pmltraining <- read.csv("pml-training.csv",na.strings=c("NA",""))
+pmltesting <- read.csv("pml-testing.csv",na.strings=c("NA",""))
+
+#split data into train and test sets
+intrain <- createDataPartition(y=pmltraining$classe,p=.7,list=FALSE)
+train <- pmltraining[intrain,]
+test <- pmltraining[-intrain,]
+
+#used in the appendix
+train.old <- train
+```
+
+For a look at the structure of the data, see the appendix.  
+A lot of values in the data are NA values. We now calculate the fraction of NA's in each column, and see that some columns have a very large percentage of NA's. We pick a column with lots of NA's and check if, when the value of this column is not NA, this has an obvious effect on the class.  
+We see the classes are more or less evenly distributed, so there is no obvious influence. We can safely omit the columns with a lot of NA values. We also omit the first seven columns of the data sets, since these contain no information about the movement, but data like the subject name, timestamps, etc.  
+Finally we check if any column has a near zero variance. This is not the case, so no extra columns are omitted
+
+```{r nas, echo=TRUE}
+#fraction of values which are NA, per column
+nas <- apply(apply(train,2,is.na),2,sum)/length(train$X)
+unique(nas)
+#check if non-na's have an obvious influence on classification (w kurtosis_roll_belt as example)
+table(train[!is.na(train$kurtosis_roll_belt),]$classe)
+
+#no -> remove variables
+train <- train[,nas==0]
+train <- train[,-seq(1,7)]
+
+test <- test[,nas==0]
+test <- test[,-seq(1,7)]
+
+#check if any variables have a near zero variance
+any(nearZeroVar(train,saveMetrics = TRUE)$nzv)
+```
+
+##Building the Model
+
+We now build the random forest model. We use the parallelisation capabilities of R to decrease the build time. We use 10-fold cross validation for resampling the data in stead of bootstrapping, also to decrease the time needed. Since the final model proved to be very accurate, this seems to have had little effect on the final accuracy.
+
+```{r build, echo=TRUE,cache=TRUE,message=FALSE}
+#create and register cluster
+cluster <- makeCluster(detectCores()-1)
+registerDoParallel(cluster)
+
+#train random forest model
+fitcontrol <- trainControl(method="cv",number=10,allowParallel = TRUE)
+modfit <- train(classe~.,data=train,method="rf", trControl=fitcontrol)
+
+#stop cluster, return to sequential execution
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+##Testing the Model
+
+Now we test the model we obtained in the last step, by using the *confusionMatrix* method from *caret*. We see the model has perfect accuracy on the training data, and 99.2% accuracy on the test data, which gives a more realistic number for the accuracy, because overfitting plays a smaller role here.
+
+```{r test, echo=TRUE, message=FALSE}
+#confusion matrix and statistics for train data
+confusionMatrix(predict(modfit,train),train$classe)
+#confusion matrix and statistics for test data
+confusionMatrix(predict(modfit,test),test$classe)
+```
+
+We plot the error rate in function of the number of trees used. We see the overall Out-of-Bag (OOB) error rate decreases steadily as the number of trees increases.  
+We also show the variance importance plot, to see which variables have the most effect on classification. We see the top 3 are: *roll_belt*, *pitch_forearm* and *yaw_belt*.
+
+```{r plots, echo=TRUE}
+#diagnostic plots
+plot(modfit$finalModel,main="Error Rate")
+legend("topright",legend=colnames(modfit$finalModel$err.rate),col=1:6,pch=19)
+
+varImpPlot(modfit$finalModel,main="Variance Importance Plot")
+```
+
+Finally the model is applied to quiz test cases. The results are not shown, because of Coursera policies, but they were all classified correctly.
+
+```{r quiz, echo=TRUE,results="hide"}
+#quiz data
+pmltesting <- pmltesting[,nas==0]
+pmltesting <- pmltesting[,-seq(1:7)]
+
+predict(modfit,pmltesting)
+```
+
+##Conclusion
+
+The random forest model is very accurate on this data set, the only drawback being the rather large time needed to build the model. The out of sample accuracy attained was around 99.2%. With this technique, it is feasible to predict in which manner the weight lifting exercises, either correctly or with which type of error, are done.
+
+##Appendix
+
+The structure and a summary of the training data set:
+
+```{r structure, echo=TRUE}
+head(train.old,n=1)
+summary(train.old)
